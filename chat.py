@@ -192,7 +192,7 @@ class ChatApp:
     def open_popup(self):
         def on_close():
             self.loop.widget = self.frame
-        def on_select(self, choice):
+        def on_select(choice):
             self.model = choice
             self.header.set_text(("header", f"Model: {self.model}"))
             self.loop.widget = self.frame
@@ -215,24 +215,27 @@ class ChatApp:
         self.messages.append({'role':'user','content':content})
         self.save_messages()
         self.refresh_messages()
-        self.loop.draw_screen()
         last = self._last_message_index()
         if last is not None:
             self.listbox.set_focus(last, coming_from='above')
+        self.loop.draw_screen()
 
         # add placeholder for assistant
         self.messages.append({'role':'assistant','content':''})
         self.save_messages()
         self.refresh_messages()
-        self.loop.draw_screen()
         last = self._last_message_index()
         if last is not None:
             self.listbox.set_focus(last, coming_from='above')
+        self.loop.draw_screen()
 
         # stream response
         assistant_buffer = ''
         async for chunk in completion(model=self.model, messages=self.messages[:-1], stream=True):  # type: ignore
             delta = chunk['choices'][0]['delta']['content']
+        response = completion(model=self.model, messages=self.messages[:-1], stream=True) # type: ignore
+        async for chunk in response:
+            delta =chunk.choices[0].delta.content
             if delta:
                 assistant_buffer += delta
                 self.messages[-1]['content'] = assistant_buffer
