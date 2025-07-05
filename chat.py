@@ -210,7 +210,6 @@ class ChatApp:
 
 
     async def process_input(self, content):
-        from litellm import completion
         # add user message
         self.messages.append({'role':'user','content':content})
         self.save_messages()
@@ -228,13 +227,15 @@ class ChatApp:
         if last is not None:
             self.listbox.set_focus(last, coming_from='above')
         self.loop.draw_screen()
-
+        
         # stream response
         assistant_buffer = ''
-        async for chunk in completion(model=self.model, messages=self.messages[:-1], stream=True):  # type: ignore
-            delta = chunk['choices'][0]['delta']['content']
-        response = completion(model=self.model, messages=self.messages[:-1], stream=True) # type: ignore
-        async for chunk in response:
+        if self._completion is None:
+            from litellm import completion
+            self._completion = completion
+
+        response = self._completion(model=self.model, messages=self.messages[:-1], stream=True) # type: ignore
+        async for chunk in response: # type: ignore
             delta =chunk.choices[0].delta.content
             if delta:
                 assistant_buffer += delta
