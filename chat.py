@@ -8,6 +8,17 @@ import urwid
 from urwid import AsyncioEventLoop
 
 
+def edit_message_in_editor(content):
+    with tempfile.NamedTemporaryFile('w+', delete=False, suffix='.md') as tf:
+        tf.write(content)
+        tf.flush()
+        editor = os.environ.get('EDITOR', 'vi')
+        subprocess.call([editor, tf.name])
+        tf.seek(0)
+        new_content = tf.read().strip()
+    os.unlink(tf.name)
+    return new_content
+
 class PopupMenu(urwid.WidgetWrap):
     def __init__(self, models, on_select, on_close):
         self.models = models
@@ -43,12 +54,57 @@ class PopupMenu(urwid.WidgetWrap):
         # let Enter and others flow through: buttons handle Enter themselves
         return super().keypress(size, key)
 
+class Input(urwid.WidgetWrap):
+    def __init__(self):
+        self.prefix = "> "
+        self.edit = urwid.Edit(self.prefix, multiline=False)
+        self.placeholder = urwid.WidgetPlaceholder(self.edit)
+        self.input_box = urwid.LineBox(self.placeholder)
+        self.is_editing = True
+
+        super().__init__(self.input_box)
+
+
+    def get_fake_edit(self):
+        return urwid.AttrMap(urwid.Text(self.prefix + self.edit.edit_text), 'footer',focus_map='focus')
+
+    def selectable(self):
+        return True
+
+    def keypress(self, size, key):
+        if self.is_editing:
+            if key == 'esc':
+                self.is_editing = False
+                self.placeholder.original_widget = self.get_fake_edit()
+                return None
+            else:
+                return self.edit.keypress(size, key)
+        else:
+            if key in ('i', 'a'):
+                self.is_editing = True
+                self.placeholder.original_widget = self.edit
+                return None
+            elif key == 'c':
+                # edit in editor
+                content = self.edit.edit_text.strip()
+                if content:
+                    new_content = edit_message_in_editor(content)
+                    self.edit.edit_text = new_content
+                    urwid.emit_signal(self, 'redraw')
+                return None
+        return super().keypress(size, key)
+
+
+urwid.register_signal(Input, ['redraw'])
+
+
 class ChatApp:
     def __init__(self, chat_file, model, available_models):
         # Color palette: user, assistant messages, focus highlight, footer
         self._completion = None
         loop = asyncio.get_event_loop()
         loop.call_soon(self._schedule_preload)
+
 
         self.palette = [
             ('user', 'black', 'dark blue'),
@@ -72,12 +128,11 @@ class ChatApp:
 
         # Input field with prompt indicator
         self.input_edit = urwid.Edit("> ", multiline=False)
-        bubble = urwid.LineBox(self.input_edit, title_align='center')
+        bubble = urwid.LineBox(self.input_edit)
 
-        self.footer = urwid.AttrWrap(bubble, 'footer', focus_attr='focus')
+        self.footer = Input()
         self.header = urwid.Text(("header", f"Model: {self.model}"))
 
-        # Frame layout: body (chat) and footer (input)
         self.frame = urwid.Frame(
             body=urwid.Padding(self.listbox, left=1, right=1),
             footer=self.footer,
@@ -90,6 +145,14 @@ class ChatApp:
             self.palette,
             unhandled_input=self.handle_input,
             event_loop=AsyncioEventLoop(loop=loop)
+        )
+
+        urwid.connect_signal(
+            self.footer, 'redraw',
+            lambda: (
+                self.loop.screen.clear(),
+                self.loop.draw_screen()
+            )
         )
 
         # Auto-focus on footer on launch
@@ -249,6 +312,9 @@ class ChatApp:
             self.listbox.set_focus(last, coming_from='above')
 
     def handle_input(self, key):
+        # set header to key pressed
+        self.header.set_text(("header", f"Model: {self.model} | Key: {key}"))
+
         if key == 'enter':
             content = self.input_edit.edit_text.strip()
             if not content:
@@ -265,11 +331,16 @@ class ChatApp:
             idx = self.listbox.focus_position
             self.edit_message_in_editor(idx)
 
-        # vim-style and exit logic (as before)
+        # up and down arrows
+        elif key == 'J':
+            key(size=None, key='down') 
+        elif key == 'K':
+            self._move_up()
         elif key == 'j':
-            self._nav_step(1)
+            self._move_down()
+        # vim style navigation
         elif key == 'k':
-            self._nav_step(-1)
+            self._move_up()
         elif key == 'G':
             last = self._last_message_index()
             if last is not None:
@@ -291,8 +362,7 @@ class ChatApp:
             self.last_key = 'd'
         elif key == 'g':
             if self.last_key == 'g':
-                self.listbox.set_focus(0, coming_from='above')
-                self.last_key = None
+                self.frame.focus_position = 'footer'
                 return
             self.last_key = 'g'
         elif key in ('i', 'a'):
@@ -305,20 +375,35 @@ class ChatApp:
         else:
             self.last_key = None
 
+    def _move_up(self):
+        #self.frame.focus_position = 'body'
+        # If we’re currently in the footer, pop up into the body at the last message:
+        if self.frame.focus_position == 'footer':
+            self.frame.focus_position = 'body'
+            idx = self._last_message_index()
+        else:
+            idx = self.listbox.focus_position - 1
+            idx = max(0, idx)
+        self.listbox.set_focus(idx, coming_from='below')
+
+    def _move_down(self):
+        idx = self.listbox.focus_position + 1
+        if idx < len(self.message_list):
+            self.listbox.set_focus(idx, coming_from='above')
+        else:
+            self.frame.focus_position = 'footer'
+
     def _nav_step(self, step):
         coming_from = "below" if step > 0 else "above"
         idx = self.listbox.focus_position + step
         if 0 <= idx < len(self.message_list):
             self.listbox.set_focus(idx, coming_from=coming_from)
         elif idx < 0:
-            self.listbox.set_focus(0)
+            self.frame.focus_position = 'footer'
 
     def _last_message_index(self):
         count = len(self.message_list)
         return count - 1 if count > 0 else None
-
-    def _first_message_index(self):
-        return 0 if self.message_list else None
 
     def run(self):
         self.loop.run()
