@@ -54,54 +54,131 @@ class PopupMenu(urwid.WidgetWrap):
         # let Enter and others flow through: buttons handle Enter themselves
         return super().keypress(size, key)
 
+class ChatBubble(urwid.WidgetWrap):
+    blocky_border_chars = {
+        "tlcorner": "▄",  # Top-left corner
+        "tline":    "▄",  # Top edge
+        "trcorner": "▄",  # Top-right corner
+        "lline":    "█ ",  # Left edge
+        "rline":    "█ ",  # Right edge
+        "blcorner": "▀",  # Bottom-left corner
+        "bline":    "▀",  # Bottom edge
+        "brcorner": "▀",  # Bottom-right corner
+    }
+    def __init__(self, text, role):
+        self.text = urwid.Text(text)
+        self.text_attr = urwid.AttrMap(self.text, role, focus_map='focus')
+        self.text_bubble = urwid.LineBox(self.text_attr, **self.blocky_border_chars) # type: ignore
+        self.text_bubble_attr = urwid.AttrMap(self.text_bubble, "border", focus_map='border_focus')
+
+        max_width = int(urwid.raw_display.Screen().get_cols_rows()[0] * 0.7)
+        text_len = max(len(line) for line in text.splitlines()) if text else 0 #
+        align = {"user": "right", "assistant": "left"}.get(role, "center")
+
+        if text_len <= max_width:
+            self.padded_text_bubble = urwid.Padding(self.text_bubble_attr, align=align, width="clip") # type: ignore
+        else:
+            self.padded_text_bubble = urwid.Padding(self.text_bubble_attr, align=align, width=('relative', 70)) # type: ignore
+
+        super().__init__(self.padded_text_bubble)
+
+
+    def selectable(self) -> bool:
+        return True
+
+class ChatHistory(urwid.ListBox):
+    def __init__(self, messages):
+        self.messages = messages
+        self.message_list = urwid.SimpleListWalker(self._build_message_widgets())
+        super().__init__(self.message_list)
+
+    def _build_message_widgets(self):
+        widgets = []
+        for msg in self.messages:
+            role = msg.get('role')
+            text = msg.get('content')
+
+            chat_bubble = ChatBubble(text, role)
+            widgets.append(chat_bubble)
+        return widgets
+
+    def set_messages(self, messages):
+        self.messages = messages
+        self.message_list[:] = self._build_message_widgets()
+
+    def rebuild(self):
+        self.message_list[:] = self._build_message_widgets()
+
+    def set_focus_last(self):
+        try:
+            last_index = len(self.message_list) - 1
+            if last_index > 0:
+                self.set_focus(last_index, coming_from='above')
+        except IndexError:
+            return None
+
+    def set_focus_first(self):
+        try:
+            if len(self.message_list) > 0:
+                self.set_focus(0, coming_from='above')
+        except IndexError:
+            return None
+
+    def delete_message(self, index):
+        if 0 <= index < len(self.message_list):
+            del self.messages[index]
+            self.set_messages(self.messages)
+            if len(self.messages) > 0:
+                self.set_focus(max(0, index - 1), coming_from='below')
+
+    def keypress(self, size, key):
+        pass
+
+        if key == 'J':
+            return super().keypress(size, 'down')
+        elif key == 'K':
+            return super().keypress(size, 'up')
+        elif key == 'j':
+            try:
+                self.set_focus(self.focus_position + 1, coming_from='above')
+                return None
+            except Exception:
+                return None
+        elif key == 'k':
+            try:
+                self.set_focus(self.focus_position -1, coming_from='below')
+                return None
+            except Exception:
+                return None
+        elif key == 'ctrl h':
+            return key
+        elif key == 'ctrl l':
+            return key
+        return super().keypress(size, key)
+
 class Input(urwid.WidgetWrap):
     def __init__(self):
         self.prefix = "> "
-        self.edit = urwid.Edit(self.prefix, multiline=False)
-        self.placeholder = urwid.WidgetPlaceholder(self.edit)
-        self.input_box = urwid.LineBox(self.placeholder)
-        self.is_editing = True
+        self.edit = urwid.Edit(self.prefix, multiline=True)
+        self.input_box = urwid.LineBox(self.edit)
 
         super().__init__(self.input_box)
 
-
-    def get_fake_edit(self):
-        return urwid.AttrMap(urwid.Text(self.prefix + self.edit.edit_text), 'footer',focus_map='focus')
 
     def selectable(self):
         return True
 
     def keypress(self, size, key):
-        if self.is_editing:
-            if key == 'esc':
-                self.is_editing = False
-                self.placeholder.original_widget = self.get_fake_edit()
-                return None
-            else:
-                return self.edit.keypress(size, key)
-        else:
-            if key in ('i', 'a'):
-                self.is_editing = True
-                self.placeholder.original_widget = self.edit
-                return None
-            elif key == 'c':
-                # edit in editor
-                content = self.edit.edit_text.strip()
-                if content:
-                    new_content = edit_message_in_editor(content)
-                    self.edit.edit_text = new_content
-                    urwid.emit_signal(self, 'redraw')
-                return None
-        return super().keypress(size, key)
+        return self.edit.keypress(size, key)
 
 
-urwid.register_signal(Input, ['redraw'])
 
 
 class ChatApp:
     def __init__(self, chat_file, model, available_models):
         # Color palette: user, assistant messages, focus highlight, footer
         self._completion = None
+        self.key_seq = ''
         loop = asyncio.get_event_loop()
         loop.call_soon(self._schedule_preload)
 
@@ -120,22 +197,21 @@ class ChatApp:
         self.available_models = available_models
         self.chat_file = chat_file
 
-        self.load_messages()
+        try:
+            with open(self.chat_file, 'r', encoding='utf-8') as f:
+                self.messages = json.load(f)
+        except (json.JSONDecodeError, FileNotFoundError):
+            self.messages = []
 
-        # Build message widgets based on history
-        self.message_list = urwid.SimpleListWalker(self.build_message_widgets())
-        self.listbox = urwid.ListBox(self.message_list)
 
-        # Input field with prompt indicator
-        self.input_edit = urwid.Edit("> ", multiline=False)
-        bubble = urwid.LineBox(self.input_edit)
 
-        self.footer = Input()
+        self.input = Input()
+        self.chat_history = ChatHistory(self.messages)
         self.header = urwid.Text(("header", f"Model: {self.model}"))
 
         self.frame = urwid.Frame(
-            body=urwid.Padding(self.listbox, left=1, right=1),
-            footer=self.footer,
+            body=self.chat_history,
+            footer=self.input,
             header=self.header,
         )
 
@@ -147,24 +223,13 @@ class ChatApp:
             event_loop=AsyncioEventLoop(loop=loop)
         )
 
-        urwid.connect_signal(
-            self.footer, 'redraw',
-            lambda: (
-                self.loop.screen.clear(),
-                self.loop.draw_screen()
-            )
-        )
 
         # Auto-focus on footer on launch
         self.frame.focus_position = 'footer'
+        self.chat_history.set_focus_last()
 
-        # Auto-scroll to bottom of chat
-        last_idx = self._last_message_index()
-        if last_idx is not None:
-            self.listbox.set_focus(last_idx, coming_from='above')
-
-        # For vim-style 'gg' detection
-        self.last_key = None
+    def selectable(self):
+        return True
 
     def _schedule_preload(self):
         """
@@ -180,57 +245,10 @@ class ChatApp:
         from litellm import completion
         self._completion = completion
 
-    def load_messages(self):
-        try:
-            with open(self.chat_file, 'r', encoding='utf-8') as f:
-                self.messages = json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            self.messages = []
-
     def save_messages(self):
         with open(self.chat_file, 'w', encoding='utf-8') as f:
             json.dump(self.messages, f, ensure_ascii=False, indent=2)
 
-    def build_message_widgets(self):
-        widgets = []
-        for msg in self.messages:
-            role = msg.get('role')
-            text = msg.get('content')
-
-
-            blocky_border_chars = {
-                "tlcorner": "▄",  # Top-left corner
-                "tline":    "▄",  # Top edge
-                "trcorner": "▄",  # Top-right corner
-                "lline":    "█ ",  # Left edge
-                "rline":    "█ ",  # Right edge
-                "blcorner": "▀",  # Bottom-left corner
-                "bline":    "▀",  # Bottom edge
-                "brcorner": "▀",  # Bottom-right corner
-            }
-
-            align = {"user": "right", "assistant": "left"}.get(role, "center")
-
-
-            # Render message bubble
-            txt = urwid.Text(text)
-            txt = urwid.AttrMap(txt, role, focus_map='focus')
-            bubble = urwid.LineBox(txt, **blocky_border_chars) # type: ignore
-            bubble = urwid.AttrMap(bubble, "border", focus_map='border_focus')
-
-            max_width = int(urwid.raw_display.Screen().get_cols_rows()[0] * 0.7)
-            text_len = max(len(line) for line in text.splitlines()) if text else 0 #
-
-            if text_len <= max_width:
-                padded = urwid.Padding(bubble, align=align, width="clip") # type: ignore
-            else:
-                padded = urwid.Padding(bubble, align=align, width=('relative', 70)) # type: ignore
-
-            widgets.append(padded)
-        return widgets
-
-    def refresh_messages(self):
-        self.message_list[:] = self.build_message_widgets()
 
     def edit_message_in_editor(self, msg_index):
         with tempfile.NamedTemporaryFile('w+', delete=False, suffix='.md') as tf:
@@ -243,12 +261,13 @@ class ChatApp:
         os.unlink(tf.name)
 
         self.messages[msg_index]['content'] = new_content
-        self.save_messages()
-        self.refresh_messages()
+
+        self.save_messages() # save changes to file
+        self.chat_history.set_messages(self.messages) # update chat history
 
         focus_idx = msg_index
-        if 0 <= focus_idx < len(self.message_list):
-            self.listbox.set_focus(focus_idx)
+        if 0 <= focus_idx < len(self.chat_history.message_list):
+            self.chat_history.set_focus(focus_idx)
         self.loop.screen.clear()
         self.loop.draw_screen()
 
@@ -271,139 +290,230 @@ class ChatApp:
         )
         self.loop.widget = self.overlay
 
-
     async def process_input(self, content):
         # add user message
         self.messages.append({'role':'user','content':content})
         self.save_messages()
-        self.refresh_messages()
-        last = self._last_message_index()
-        if last is not None:
-            self.listbox.set_focus(last, coming_from='above')
-        self.loop.draw_screen()
-
         # add placeholder for assistant
         self.messages.append({'role':'assistant','content':''})
-        self.save_messages()
-        self.refresh_messages()
-        last = self._last_message_index()
-        if last is not None:
-            self.listbox.set_focus(last, coming_from='above')
+        self.chat_history.set_messages(self.messages)
+        self.chat_history.set_focus_last()
         self.loop.draw_screen()
-        
+
+
         # stream response
-        assistant_buffer = ''
+        # import completion if not already imported async
         if self._completion is None:
             from litellm import completion
             self._completion = completion
 
         response = self._completion(model=self.model, messages=self.messages[:-1], stream=True) # type: ignore
         async for chunk in response: # type: ignore
-            delta =chunk.choices[0].delta.content
+            delta = chunk.choices[0].delta.content
             if delta:
-                assistant_buffer += delta
-                self.messages[-1]['content'] = assistant_buffer
-                self.refresh_messages()
-                self.listbox.set_focus_valign('bottom')
+                self.messages[-1]['content'] += delta
+                self.chat_history.set_messages(self.messages)
+                #self.chat_history.set_focus_valign('bottom')
                 self.loop.draw_screen()
         # final save
         self.save_messages()
-        if last is not None:
-            self.listbox.set_focus(last, coming_from='above')
+
 
     def handle_input(self, key):
-        # set header to key pressed
-        self.header.set_text(("header", f"Model: {self.model} | Key: {key}"))
+        def delete_focused_message():
+            if self.frame.focus_position == 'body':
+                idx = self.chat_history.focus_position
+                try:
+                    del self.messages[idx]
+                except IndexError:
+                    return
+                self.chat_history.set_messages(self.messages)
+                if len(self.messages) == 0:
+                    self.frame.focus_position = 'footer'
+                    return
+                self.save_messages()
 
-        if key == 'enter':
-            content = self.input_edit.edit_text.strip()
+
+        def insert_mode():
+            self.frame.focus_position = 'footer'
+
+
+        def go_to_first_message():
+            self.chat_history.set_focus_first()
+            self.frame.focus_position = 'body'
+
+        def go_to_last_message():
+            self.chat_history.set_focus_last()
+            self.frame.focus_position = 'body'
+            
+        def switch_message_role(role):
+            idx = self.chat_history.focus_position
+            self.messages[idx]["role"] = role
+            self.save_messages()
+            self.chat_history.set_messages(self.messages)
+            self.loop.draw_screen()
+
+        def switch_message_to_assistant():
+            switch_message_role("assistant")
+
+        def switch_message_to_user():
+            switch_message_role("user")
+
+        def esc():
+            self.frame.focus_position = 'body'
+            self.key_seq = ''
+
+        def submit_message():
+            content = self.input.edit.edit_text.strip()
             if not content:
                 return
-            self.input_edit.edit_text = ''
             asyncio.ensure_future(self.process_input(content))
-        elif key == 'esc':
-            self.frame.focus_position = 'body'
-        elif key == "window resize":
-            self.refresh_messages()
-        elif key == 'ctrl p':
+
+        def edit_focused_in_editor():
+            if self.frame.focus_position == 'footer':
+                content = self.input.edit.edit_text.strip()
+                new_content = edit_message_in_editor(content)
+                self.input.edit.edit_text = new_content
+                self.loop.screen.clear()
+                self.loop.draw_screen()
+                return None
+            elif self.frame.focus_position == 'body':
+                idx = self.chat_history.focus_position
+                self.edit_message_in_editor(idx)
+
+
+        def open_model_selection():
             self.open_popup()
-        elif key == 'c':
-            idx = self.listbox.focus_position
-            self.edit_message_in_editor(idx)
 
-        # up and down arrows
-        elif key == 'J':
-            key(size=None, key='down') 
-        elif key == 'K':
-            self._move_up()
-        elif key == 'j':
-            self._move_down()
-        # vim style navigation
-        elif key == 'k':
-            self._move_up()
-        elif key == 'G':
-            last = self._last_message_index()
-            if last is not None:
-                self.listbox.set_focus(last, coming_from='below')
-        elif key == 'd':
-            if self.last_key == 'd':
-                # delete the focused message
-                idx = self.listbox.focus_position
-                if 0 <= idx < len(self.message_list):
-                    del self.messages[idx]
-                    self.save_messages()
-                    self.refresh_messages()
-                    if len( self.messages) == 0:
-                        self.frame.focus_position = 'footer'
-                        return 
-                    self.listbox.set_focus(max(0, idx - 1), coming_from='below')
-                self.last_key = None
-                return
-            self.last_key = 'd'
-        elif key == 'g':
-            if self.last_key == 'g':
-                self.frame.focus_position = 'footer'
-                return
-            self.last_key = 'g'
-        elif key in ('i', 'a'):
-            last = self._last_message_index()
-            if last:
-                self.listbox.set_focus(last, coming_from='below')
-            self.frame.focus_position = 'footer'
-        elif key in ('ctrl c', 'ctrl d'):
+        def quit_out():
+            self.save_messages()
             raise urwid.ExitMainLoop()
-        else:
-            self.last_key = None
 
-    def _move_up(self):
-        #self.frame.focus_position = 'body'
-        # If we’re currently in the footer, pop up into the body at the last message:
-        if self.frame.focus_position == 'footer':
-            self.frame.focus_position = 'body'
-            idx = self._last_message_index()
-        else:
-            idx = self.listbox.focus_position - 1
-            idx = max(0, idx)
-        self.listbox.set_focus(idx, coming_from='below')
+        def swap_message(delta):
+            try:
+                idx = self.chat_history.focus_position
+                new_idx = idx + delta
+                if new_idx >= 0:
+                    message = self.messages[idx]
+                    prev_message = self.messages[new_idx]
+                    self.messages[idx] = prev_message
+                    self.messages[new_idx] = message
+                    self.chat_history.set_messages(self.messages)
+                    self.chat_history.set_focus(new_idx, coming_from='above')
+                    self.save_messages()
+            except IndexError:
+                return None
 
-    def _move_down(self):
-        idx = self.listbox.focus_position + 1
-        if idx < len(self.message_list):
-            self.listbox.set_focus(idx, coming_from='above')
-        else:
-            self.frame.focus_position = 'footer'
 
-    def _nav_step(self, step):
-        coming_from = "below" if step > 0 else "above"
-        idx = self.listbox.focus_position + step
-        if 0 <= idx < len(self.message_list):
-            self.listbox.set_focus(idx, coming_from=coming_from)
-        elif idx < 0:
-            self.frame.focus_position = 'footer'
+        def swap_message_up():
+            swap_message(-1)
 
-    def _last_message_index(self):
-        count = len(self.message_list)
-        return count - 1 if count > 0 else None
+        def swap_message_down():
+            swap_message(1)
+
+        def overlay():
+            overlay = urwid.Overlay(top_w=Input(),
+                                    bottom_w=self.frame,
+                                    align='center',
+                                    width=('relative', 40),
+                                    valign='middle',
+                                    height=('relative', 40))
+            self.loop.widget = overlay
+
+        def add_message(index):
+            new_message = {'role': 'user', 'content': ''}
+            self.messages.insert(index, new_message)
+            self.chat_history.set_messages(self.messages)
+            self.chat_history.set_focus(index, coming_from='above')
+            self.edit_message_in_editor(index)
+
+
+        def add_message_above():
+            idx = self.chat_history.focus_position
+            add_message(idx)
+
+        def add_message_below():
+            idx = self.chat_history.focus_position + 1
+            add_message(idx)
+
+
+
+        key_maps = {
+            'enter': submit_message,
+            'ctrl s': submit_message,
+            'i': insert_mode,
+            'G': go_to_last_message,
+            'esc': esc,
+            'ctrl p': open_model_selection,
+            'ctrl e': edit_focused_in_editor,
+            'q': quit_out,
+            'ctrl c': quit_out,
+            'ctrl d': quit_out,
+            'ctrl right': switch_message_to_user,
+            'ctrl left': switch_message_to_assistant,
+            'ctrl up': swap_message_up,
+            'ctrl down': swap_message_down,
+            'o': add_message_above,
+            'O': add_message_below,
+        }
+
+        key_sequences = {
+            'dd': delete_focused_message,
+            'gg': go_to_first_message,
+        }
+
+
+        if isinstance(key, str):
+            self.key_seq += key
+        # set header to key pressed DEBUG:
+        self.header.set_text(("header", f"Model: {self.model} | Key: {key} | Key Seq: {self.key_seq}"))
+
+        action = key_maps.get(self.key_seq, None)
+        if action:
+            if callable(action):
+                action()
+                self.key_seq = ''
+                self.header.set_text(("header", f"Model: {self.model} | Key: {key} | Key Seq: {self.key_seq}"))
+
+        action = key_sequences.get(self.key_seq, None)
+        if action:
+            if callable(action):
+                action()
+                self.key_seq = ''
+                self.header.set_text(("header", f"Model: {self.model} | Key: {key} | Key Seq: {self.key_seq}"))
+
+        if len(self.key_seq) > 5:
+            self.key_seq = ''
+
+        if key == 'esc':
+            esc()
+            return None
+        if key == "window resize":
+            self.chat_history.set_messages(self.messages) # rebuild message widgets (for relative max width of message bubbles)
+        #elif key == 'd':
+        #    if self.last_key == 'd':
+        #        # delete the focused message
+        #        idx = self.chat_history.focus_position
+        #        if 0 <= idx < len(self.chat_history.message_list):
+        #            del self.messages[idx]
+        #            self.chat_history.set_messages(self.messages)
+        #            self.save_messages()
+        #            if len( self.messages) == 0:
+        #                self.frame.focus_position = 'footer'
+        #                return 
+        #            self.chat_history.set_focus(max(0, idx - 1), coming_from='below')
+        #        self.last_key = None
+        #        return
+        #    self.last_key = 'd'
 
     def run(self):
-        self.loop.run()
+        try:
+            self.loop.run()
+        except KeyboardInterrupt:
+            self.exit()
+
+    def exit(self):
+        self.save_messages()
+        raise urwid.ExitMainLoop()
+
+
