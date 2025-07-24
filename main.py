@@ -5,7 +5,7 @@ import tempfile
 
 import tomllib
 
-from chat import ChatApp
+from app import ChatApp
 
 
 def load_config():
