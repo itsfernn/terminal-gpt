@@ -7,6 +7,7 @@ from custom_widgets.chat import ChatHistory
 
 class VimKeyHandler(urwid.WidgetWrap):
     MAX_KEY_SEQ_LENGTH = 2
+    signals = ['submit']
     def __init__(self, chat_history, input, header):
         self.chat_history : ChatHistory = chat_history
         self.input = input
@@ -19,6 +20,7 @@ class VimKeyHandler(urwid.WidgetWrap):
 
         self.keybinds = {
             ('enter',): self.submit_message,
+            ('ctrl s',): self.submit_message,
             ('i',): self.insert_mode,
             ('G',): self.go_to_last_message,
             ('ctrl e',): self.edit_focused_in_editor,
@@ -48,6 +50,11 @@ class VimKeyHandler(urwid.WidgetWrap):
                 self.key_buffer.clear()
                 self.frame.focus_position = 'body'
                 return None
+            if key == 'enter':
+                self.submit_message()
+                return None
+            if key == 'shift enter':
+                super().keypress(size, 'enter')
             return super().keypress(size, key)
 
 
@@ -97,8 +104,6 @@ class VimKeyHandler(urwid.WidgetWrap):
         idx = self.chat_history.focus_position
         self.chat_history.messages[idx]["role"] = role
         self.chat_history.rebuild()
-        # NOTE: Handle this
-        #self.loop.draw_screen()
 
     def switch_message_to_assistant(self):
         self.switch_message_role("assistant")
@@ -115,6 +120,8 @@ class VimKeyHandler(urwid.WidgetWrap):
         content = self.input.edit.edit_text.strip()
         if not content:
             return
+        self.input.edit.edit_text = ''
+        urwid.emit_signal(self, 'submit', content)
         #asyncio.ensure_future(self.process_input(content))
 
     # NOTE: maybe use signal or move to app

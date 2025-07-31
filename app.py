@@ -108,6 +108,8 @@ class ChatApp:
             event_loop=AsyncioEventLoop(loop=loop)
         )
 
+        urwid.connect_signal(self.main, 'submit', lambda content: asyncio.ensure_future(self.process_input(content)))
+
     def selectable(self):
         return True
 
@@ -172,7 +174,7 @@ class ChatApp:
             from litellm import completion
             self._completion = completion
 
-        response = self._completion(model=self.model, messages=self.messages[:-1], stream=True) # type: ignore
+        response = self._completion(model=self.model, messages=self.chat_history.messages[:-1], stream=True) # type: ignore
         async for chunk in response: # type: ignore
             delta = chunk.choices[0].delta.content
             if delta:
