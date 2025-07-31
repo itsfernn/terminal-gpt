@@ -23,7 +23,6 @@ class VimKeyHandler(urwid.WidgetWrap):
             ('ctrl s',): self.submit_message,
             ('i',): self.insert_mode,
             ('G',): self.go_to_last_message,
-            ('ctrl e',): self.edit_focused_in_editor,
             ('q',): self.quit_out,
             ('ctrl c',): self.quit_out,
             ('ctrl d',): self.quit_out,
@@ -59,7 +58,7 @@ class VimKeyHandler(urwid.WidgetWrap):
 
 
         self.key_buffer.append(key)
-        self.header.set_keybuffer(self.key_buffer)
+        self.header.set_value("key_buffer", self.key_buffer)
 
 
         matched = False
@@ -115,14 +114,12 @@ class VimKeyHandler(urwid.WidgetWrap):
         self.frame.focus_position = 'body'
         self.key_buffer.clear()
 
-    # NOTE: move to app
     def submit_message(self):
         content = self.input.edit.edit_text.strip()
         if not content:
             return
         self.input.edit.edit_text = ''
         urwid.emit_signal(self, 'submit', content)
-        #asyncio.ensure_future(self.process_input(content))
 
     # NOTE: maybe use signal or move to app
     def edit_focused_in_editor(self):

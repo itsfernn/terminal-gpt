@@ -11,7 +11,7 @@ from custom_widgets.model_select import PopupMenu
 from custom_widgets.vimkey import VimKeyHandler
 
 
-def edit_message_in_editor(content):
+def edit_in_editor(content):
     with tempfile.NamedTemporaryFile('w+', delete=False, suffix='.md') as tf:
         tf.write(content)
         tf.flush()
@@ -23,32 +23,24 @@ def edit_message_in_editor(content):
     return new_content
 
 
-class CustomHeader(urwid.WidgetWrap):
-    def __init__(self, model):
-        self.model = model
-        self.keybuffer = None
-        self.widget = urwid.Text(("header", f"Model: {self.model} | Key: None | Key Buffer: []"))
-        super().__init__(self.widget)
+class KeyValueText(urwid.WidgetWrap):
+    def __init__(self, values={}):
+        self.kv_store = values
+        self.text = urwid.Text(self.build_string())
+        super().__init__(self.text)
 
-    def set_keybuffer(self, keybuffer):
-        self.keybuffer = keybuffer
-        self.update()
+    def set_value(self, key, value):
+        self.kv_store[key] = value
+        self.text.set_text(self.build_string())
 
-    def set_model(self, model):
-        self.model = model
-        self.update()
-
-    def update(self):
-        string =  ''
-        if self.model is not None:
-            string = f"Model: {self.model}"
-
-        if self.keybuffer is not None:
+    def build_string(self):
+        string = ''
+        for key, value in self.kv_store.items():
             if string:
                 string += " | "
-            string += f"Key Buffer: {self.keybuffer}"
+            string += f"{key}: {value}"
 
-        self.widget.set_text(("header", string))
+        return string
 
 
 class Input(urwid.WidgetWrap):
@@ -93,7 +85,7 @@ class ChatApp:
 
         self.input = Input()
         self.chat_history = ChatHistory(chat_file=chat_file)
-        self.header = CustomHeader(model=self.model)
+        self.header = KeyValueText(values={'model': model, "test": "bar"})
 
         self.main = VimKeyHandler(chat_history=self.chat_history, input=self.input, header=self.header)
 
@@ -127,15 +119,17 @@ class ChatApp:
         from litellm import completion
         self._completion = completion
 
+    def edit_input_in_editor(self):
+        content = self.input.edit.edit_text.strip()
+        new_content = edit_in_editor(content)
+
+        self.input.edit.edit_text = new_content
+        self.loop.screen.clear()
+        self.loop.draw_screen()
+
     def edit_message_in_editor(self, msg_index):
-        with tempfile.NamedTemporaryFile('w+', delete=False, suffix='.md') as tf:
-            tf.write(self.chat_history.messages[msg_index]['content'])
-            tf.flush()
-            editor = os.environ.get('EDITOR', 'vi')
-            subprocess.call([editor, tf.name])
-            tf.seek(0)
-            new_content = tf.read().strip()
-        os.unlink(tf.name)
+        content = self.chat_history.messages[msg_index]['content']
+        new_content = edit_in_editor(content)
 
         self.chat_history.messages[msg_index]['content'] = new_content
         self.chat_history.rebuild()
@@ -151,6 +145,7 @@ class ChatApp:
 
     def select_model(self, model):
         self.model = model 
+        self.header.set_value("model", model)
 
     def open_popup(self):
         self.loop.widget = self.model_selet_overlay
@@ -158,7 +153,6 @@ class ChatApp:
     async def process_input(self, content):
         # add user message
         self.chat_history.messages.append({'role':'user','content':content})
-
 
         # add placeholder for assistant
         self.chat_history.messages.append({'role':'assistant','content':''})
@@ -186,6 +180,17 @@ class ChatApp:
     def handle_input(self, key):
         if key == "window resize":
             self.chat_history.rebuild()
+            return None
+
+        elif key == 'ctrl e':
+            if self.main.frame.focus_position == 'footer':
+                self.edit_input_in_editor()
+
+            elif self.main.frame.focus_position == 'body':
+                idx = self.main.chat_history.focus_position
+                self.edit_message_in_editor(idx)
+
+
 
     def run(self):
         self.loop.run()
