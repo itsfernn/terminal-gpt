@@ -1,4 +1,5 @@
 import asyncio
+import json
 import os
 import subprocess
 import tempfile
@@ -6,7 +7,7 @@ import tempfile
 import urwid
 from urwid import AsyncioEventLoop
 
-from custom_widgets.chat import ChatHistory
+from custom_widgets.chat import ChatHistory, EditableChatBubble
 from custom_widgets.model_select import PopupMenu
 from custom_widgets.vimkey import VimKeyHandler
 
@@ -43,23 +44,6 @@ class KeyValueText(urwid.WidgetWrap):
         return string
 
 
-class Input(urwid.WidgetWrap):
-    def __init__(self):
-        self.prefix = "> "
-        self.edit = urwid.Edit(self.prefix, multiline=True)
-        self.input_box = urwid.LineBox(self.edit)
-
-        super().__init__(self.input_box)
-
-
-    def selectable(self):
-        return True
-
-    # NOTE: I belive this can be removed
-    def keypress(self, size, key):
-        return self.edit.keypress(size, key)
-
-
 class ChatApp:
     def __init__(self, chat_file, model, available_models):
         # Color palette: user, assistant messages, focus highlight, footer
@@ -72,35 +56,51 @@ class ChatApp:
         self.palette = [
             ('user', 'black', 'dark blue'),
             ('assistant', 'black', 'dark blue'),
-            ('footer', 'default', 'default'),
-            ('border', 'dark blue', 'default'),
             ('focus', 'black', 'white'),
+            ('border', 'dark blue', 'default'),
             ('border_focus', 'white', 'default'),
+            ('default', 'default', 'default'),
+            ('selected', 'black', 'dark blue'),
         ]
 
 
         self.model = model
         self.available_models = available_models
 
+        messages = []
 
-        self.input = Input()
-        self.chat_history = ChatHistory(chat_file=chat_file)
-        self.header = KeyValueText(values={'model': model, "test": "bar"})
+        if chat_file is not None:
+            self.chat_file = chat_file
+            try:
+                with open(self.chat_file, 'r', encoding='utf-8') as f:
+                    messages = json.load(f)
+            except (json.JSONDecodeError, FileNotFoundError):
+                pass
 
-        self.main = VimKeyHandler(chat_history=self.chat_history, input=self.input, header=self.header)
+        self.chat_history = ChatHistory(messages=messages)
+
+        self.header = KeyValueText(values={'model': model})
+
+        self.main = VimKeyHandler(chat_history=self.chat_history, header=self.header)
 
         self.model_select = PopupMenu(self.available_models, on_select=self.select_model, on_close=self.open_main_view)
-        self.model_selet_overlay = urwid.Overlay( top_w=self.model_select, bottom_w=self.main, align='center', width=('relative', 40), valign='middle', height=('relative', 40))
 
         # Main loop with key handler
         self.loop = urwid.MainLoop(
             self.main,
             self.palette,
             unhandled_input=self.handle_input,
+            input_filter=self.input_filter,
             event_loop=AsyncioEventLoop(loop=loop)
         )
 
-        urwid.connect_signal(self.main, 'submit', lambda content: asyncio.ensure_future(self.process_input(content)))
+    def input_filter(self, input_list, raw_input):
+        if 'window resize' in input_list:
+            self.main.header.set_value("window_size", self.loop.screen.get_cols_rows())
+            self.chat_history.rebuild()
+        return input_list
+
+
 
     def selectable(self):
         return True
@@ -119,20 +119,13 @@ class ChatApp:
         from litellm import completion
         self._completion = completion
 
-    def edit_input_in_editor(self):
-        content = self.input.edit.edit_text.strip()
-        new_content = edit_in_editor(content)
-
-        self.input.edit.edit_text = new_content
-        self.loop.screen.clear()
-        self.loop.draw_screen()
-
     def edit_message_in_editor(self, msg_index):
-        content = self.chat_history.messages[msg_index]['content']
+        widget = self.chat_history.message_list[msg_index]
+        content = widget.get_content()
         new_content = edit_in_editor(content)
 
-        self.chat_history.messages[msg_index]['content'] = new_content
-        self.chat_history.rebuild()
+        widget.content = new_content
+        widget.update()
 
         focus_idx = msg_index
         if 0 <= focus_idx < len(self.chat_history.message_list):
@@ -146,18 +139,26 @@ class ChatApp:
     def select_model(self, model):
         self.model = model 
         self.header.set_value("model", model)
+        self.loop.widget = self.main
 
     def open_popup(self):
-        self.loop.widget = self.model_selet_overlay
+        model_select_overlay = urwid.Overlay(
+            top_w=self.model_select,
+            bottom_w=self.main,
+            align='center',
+            width=('pack'),
+            valign='middle',
+            height=('pack'),
+        )
+        self.loop.widget = model_select_overlay
 
-    async def process_input(self, content):
-        # add user message
-        self.chat_history.messages.append({'role':'user','content':content})
-
+    async def get_response(self):
         # add placeholder for assistant
-        self.chat_history.messages.append({'role':'assistant','content':''})
-        self.chat_history.rebuild()
-        self.chat_history.set_focus_last()
+        response_message = EditableChatBubble(content="", role='assistant') 
+        self.chat_history.message_list.append(response_message)
+
+        last_index = len(self.chat_history.message_list) - 1
+        self.chat_history.set_focus(last_index, "below")
 
         self.loop.draw_screen()
 
@@ -168,27 +169,35 @@ class ChatApp:
             from litellm import completion
             self._completion = completion
 
-        response = self._completion(model=self.model, messages=self.chat_history.messages[:-1], stream=True) # type: ignore
+
+
+        messages = [msg.to_dict() for msg in self.chat_history.message_list[:-1]]
+        response = self._completion(model=self.model, messages=messages, stream=True) # type: ignore
         async for chunk in response: # type: ignore
             delta = chunk.choices[0].delta.content
             if delta:
-                self.chat_history.messages[-1]['content'] += delta
-                self.chat_history.rebuild()
-                #self.chat_history.set_focus_valign('bottom')
+                response_message.content += delta
+                response_message.update()
+                self.chat_history.set_focus_valign("bottom")
                 self.loop.draw_screen()
 
+    def write_changes(self):
+        with open(self.chat_file, 'w', encoding='utf-8') as f:
+            json.dump(self.chat_history.to_dict(), f, ensure_ascii=False, indent=2)
+
     def handle_input(self, key):
-        if key == "window resize":
-            self.chat_history.rebuild()
+        if key == "enter":
+            asyncio.ensure_future(self.get_response())
             return None
 
         elif key == 'ctrl e':
-            if self.main.frame.focus_position == 'footer':
-                self.edit_input_in_editor()
+            idx = self.main.chat_history.focus_position
+            self.edit_message_in_editor(idx)
+            return None
 
-            elif self.main.frame.focus_position == 'body':
-                idx = self.main.chat_history.focus_position
-                self.edit_message_in_editor(idx)
+        elif key == 'ctrl p':
+            self.open_popup()
+            return None
 
 
 
