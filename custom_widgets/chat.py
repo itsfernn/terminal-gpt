@@ -1,55 +1,66 @@
-import urwid
+from urwid import (
+    AttrMap,
+    Edit,
+    LineBox,
+    ListBox,
+    Padding,
+    SimpleListWalker,
+    Text,
+    WidgetPlaceholder,
+    WidgetWrap,
+    raw_display,
+)
 
+blocky_border_chars = {
+    "tlcorner": "▄",  # Top-left corner
+    "tline":    "▄",  # Top edge
+    "trcorner": "▄",  # Top-right corner
+    "lline":    "█ ",  # Left edge
+    "rline":    "█ ",  # Right edge
+    "blcorner": "▀",  # Bottom-left corner
+    "bline":    "▀",  # Bottom edge
+    "brcorner": "▀",  # Bottom-right corner
+}
 
-class ChatBubble(urwid.WidgetWrap):
-    blocky_border_chars = {
-        "tlcorner": "▄",  # Top-left corner
-        "tline":    "▄",  # Top edge
-        "trcorner": "▄",  # Top-right corner
-        "lline":    "█ ",  # Left edge
-        "rline":    "█ ",  # Right edge
-        "blcorner": "▀",  # Bottom-left corner
-        "bline":    "▀",  # Bottom edge
-        "brcorner": "▀",  # Bottom-right corner
-    }
+class ChatBubble(WidgetWrap):
 
     def __init__(self, content, role):
-        text = urwid.Text(content)
-        text_attr = urwid.AttrMap(text, role, focus_map='focus')
-        text_bubble = urwid.LineBox(text_attr, **self.blocky_border_chars) # type: ignore
-        text_bubble_attr = urwid.AttrMap(text_bubble, "border", focus_map='border_focus')
+        text = Text(content)
+        text_attr = AttrMap(text, role, focus_map='focus')
+        text_bubble = LineBox(text_attr, **blocky_border_chars) # type: ignore
+        text_bubble_attr = AttrMap(text_bubble, "border", focus_map='border_focus')
 
         align = {"user": "right", "assistant": "left"}.get(role, "center")
 
-        max_width = int(urwid.raw_display.Screen().get_cols_rows()[0] * 0.7)
+        max_width = int(raw_display.Screen().get_cols_rows()[0] * 0.7)
         text_len = max(len(line) for line in content.splitlines()) if content else 0
 
 
         if text_len <= max_width:
-            padded_text_bubble = urwid.Padding(text_bubble_attr, align=align, width="clip") # type: ignore
+            padded_text_bubble = Padding(text_bubble_attr, align=align, width="clip") # type: ignore
         else:
-            padded_text_bubble = urwid.Padding(text_bubble_attr, align=align, width=('relative', 70)) # type: ignore
+            padded_text_bubble = Padding(text_bubble_attr, align=align, width=('relative', 70)) # type: ignore
 
         super().__init__(padded_text_bubble)
 
     def selectable(self):
         return True
 
-class ChatEdit(urwid.WidgetWrap):
+class ChatEdit(WidgetWrap):
     def __init__(self,content, role):
         align = {"user": "right", "assistant": "left"}.get(role, "center")
 
-        self.edit = urwid.Edit("> ", multiline=True)
+        self.edit = Edit("> ", multiline=True)
         self.edit.set_edit_text(content)
 
-        line_edit = urwid.LineBox(self.edit)
-        input = urwid.Padding(line_edit, align=align, width=('relative', 70)) # type: ignore
+        line_edit = LineBox(self.edit)
+        input = Padding(line_edit, align=align, width=('relative', 70)) # type: ignore
         super().__init__(input)
 
     def selectable(self):
         return True
 
-class EditableChatBubble(urwid.WidgetPlaceholder):
+class EditableChatBubble(WidgetPlaceholder):
     def __init__(self, content, role):
         self.content = content
         self.role = role
@@ -97,14 +108,14 @@ class EditableChatBubble(urwid.WidgetPlaceholder):
         }
 
 
-class ChatHistory(urwid.ListBox):
+class ChatHistory(ListBox):
     def __init__(self, messages=None):
         if messages is None or len(messages) == 0:
             first_message = EditableChatBubble(content="", role="user")
-            self.message_list = urwid.SimpleListWalker([first_message])
+            self.message_list = SimpleListWalker([first_message])
             first_message.enter_insert_mode(edit_pos="start")
         else:
-            self.message_list = urwid.SimpleListWalker(self._build_message_widgets(messages))
+            self.message_list = SimpleListWalker(self._build_message_widgets(messages))
         super().__init__(self.message_list)  # Initialize ListBox before using its methods
 
         last_index = len(self.message_list) - 1
@@ -116,6 +127,12 @@ class ChatHistory(urwid.ListBox):
         except IndexError:
             pass
 
+    def in_insert_mode(self):
+        if self.focus is not None:
+            assert(isinstance(self.focus, EditableChatBubble))
+            return self.focus.in_insert_mode()
+        return False
+
     def _build_message_widgets(self, messages):
         widgets = []
         for msg in messages:
@@ -126,7 +143,7 @@ class ChatHistory(urwid.ListBox):
         return widgets
 
     def to_dict(self):
-        return [msg.to_dict for msg in self.message_list]
+        return [msg.to_dict() for msg in self.message_list]
 
     def rebuild(self):
         for message in self.message_list:

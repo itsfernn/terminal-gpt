@@ -1,11 +1,10 @@
-import asyncio
 import json
 import os
 import subprocess
 import tempfile
+import threading
 
 import urwid
-from urwid import AsyncioEventLoop
 
 from custom_widgets.chat import ChatHistory, EditableChatBubble
 from custom_widgets.model_select import PopupMenu
@@ -48,9 +47,9 @@ class ChatApp:
     def __init__(self, chat_file, model, available_models):
         # Color palette: user, assistant messages, focus highlight, footer
         self._completion = None
-        self.key_seq = ''
-        loop = asyncio.get_event_loop()
-        loop.call_soon(self._schedule_preload)
+        self._busy = False
+
+        threading.Thread(target=self._preload_completion, daemon=True).start()
 
 
         self.palette = [
@@ -91,26 +90,21 @@ class ChatApp:
             self.palette,
             unhandled_input=self.handle_input,
             input_filter=self.input_filter,
-            event_loop=AsyncioEventLoop(loop=loop)
         )
 
     def input_filter(self, input_list, raw_input):
         if 'window resize' in input_list:
             self.main.header.set_value("window_size", self.loop.screen.get_cols_rows())
             self.chat_history.rebuild()
+        if self._busy:
+            # filter out all “enter” presses
+            return [k for k in input_list if k != 'enter']
         return input_list
 
 
 
     def selectable(self):
         return True
-
-    def _schedule_preload(self):
-        """
-        Import litellm.completion in executor to warm up module on startup
-        """
-        loop = asyncio.get_event_loop()
-        loop.run_in_executor(None, self._preload_completion)
 
     def _preload_completion(self):
         """
@@ -152,7 +146,7 @@ class ChatApp:
         )
         self.loop.widget = model_select_overlay
 
-    async def get_response(self):
+    def get_response(self):
         # add placeholder for assistant
         response_message = EditableChatBubble(content="", role='assistant') 
         self.chat_history.message_list.append(response_message)
@@ -173,7 +167,7 @@ class ChatApp:
 
         messages = [msg.to_dict() for msg in self.chat_history.message_list[:-1]]
         response = self._completion(model=self.model, messages=messages, stream=True) # type: ignore
-        async for chunk in response: # type: ignore
+        for chunk in response: # type: ignore
             delta = chunk.choices[0].delta.content
             if delta:
                 response_message.content += delta
@@ -187,8 +181,15 @@ class ChatApp:
 
     def handle_input(self, key):
         if key == "enter":
-            asyncio.ensure_future(self.get_response())
+            if self._busy:
+                return None
+            self._busy = True
+            try:
+                self.get_response()
+            finally:
+                self._busy = False
             return None
+
 
         elif key == 'ctrl e':
             idx = self.main.chat_history.focus_position
@@ -199,7 +200,14 @@ class ChatApp:
             self.open_popup()
             return None
 
-
+        elif key == 'q':
+            # Tell Urwid to stop its MainLoop
+            raise urwid.ExitMainLoop()
 
     def run(self):
+        print("Starting chat application...")
         self.loop.run()
+
+    def shutdown(self):
+        self.write_changes()
+

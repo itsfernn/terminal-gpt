@@ -63,15 +63,23 @@ def main():
     # Check if the chat file exists, if not, create a temporary one
     if args.chat_file is None:
         try:
-            tf = tempfile.NamedTemporaryFile(delete=False, suffix='.json')
+            base_temp_dir = tempfile.gettempdir()
+            subfolder = 'terminal_gpt_chats'
+            temp_dir = os.path.join(base_temp_dir, subfolder)
+            os.makedirs(temp_dir, exist_ok=True)
+            tf = tempfile.NamedTemporaryFile(delete=False, dir=temp_dir, suffix='.json')
             chat_file = tf.name
+            tf.close()  # Close the file so it can be used elsewhere
         except Exception:
             print("Failed to create a temporary chat file. Please specify a valid chat file path.")
             return
     else:
         chat_file = args.chat_file
 
-    ChatApp(chat_file, model, models).run()
+    app = ChatApp(chat_file, model, models)
+    app.run()
+    app.shutdown()
+
 
 if __name__ == "__main__":
     main()

@@ -11,6 +11,7 @@ setup(
     entry_points={
         'console_scripts': [
             'terminal_gpt = main:main',  # Assumes main() is your entry function
+            'render_chat = render_chat:main',
         ],
     },
 )

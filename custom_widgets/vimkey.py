@@ -16,17 +16,14 @@ class VimKeyHandler(urwid.WidgetWrap):
             focus_part='body'
         )
 
-        self.set_insert_mode(False)
+        self.set_insert_mode(self.chat_history.in_insert_mode())
 
         self.keybinds = {
             ('G',): self.go_to_last_message,
-            ('q',): self.quit_out,
             ('i',): self.enter_insert_mode,
             ('a',): self.enter_insert_mode,
             ('I',): lambda: self.enter_insert_mode("start"),
             ('A',): lambda: self.enter_insert_mode("end"),
-            ('ctrl c',): self.quit_out,
-            ('ctrl d',): self.quit_out,
             ('j',): self.focus_next_message,
             ('k',): self.focus_previous_message,
             ('l',): self.switch_message_to_user,
@@ -197,6 +194,3 @@ class VimKeyHandler(urwid.WidgetWrap):
             idx = self.chat_history.focus_position + 1
             self.add_message(idx)
 
-    def quit_out(self):
-        #self.chat_history.write_changes()
-        raise urwid.ExitMainLoop()
