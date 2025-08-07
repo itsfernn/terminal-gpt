@@ -1,38 +1,43 @@
 import urwid
 
 
-class MenuEntry(urwid.WidgetWrap):
-    def __init__(self, label):
-        self.label = label
-        text = urwid.Text(label, align='center')
-        attr_map = urwid.AttrMap(text, 'default', focus_map='selected')
-        super().__init__(attr_map)
+class ModelEntry(urwid.WidgetWrap):
+    def __init__(self, model):
+        self.model = model
+        self.name = model.get('name', 'Unknown Model')
+        self.provider = model.get('provider', 'Unknown Provider')
+
+        name_text = urwid.Text(self.name)
+        provider_text = urwid.Text(self.provider, align='right')
+
+        columns = urwid.Columns(
+            [
+                ('weight', 2, name_text),
+                ('weight', 1, provider_text),
+            ],
+            dividechars=5
+        )
+        columns_attr = urwid.AttrMap(columns, attr_map="default", focus_map="focus")
+        super().__init__(columns_attr)
 
     def selectable(self):
         return True
 
+    def get_entry(self):
+        return self.model
+
     def get_label(self):
-        return self.label
+        return self.name
 
 class PopupMenu(urwid.WidgetWrap):
-    def __init__(self, models, on_select, on_close):
+    def __init__(self, entries, on_select, on_close):
         self.on_select = on_select
         self.on_close = on_close
 
-        # Build a ListBox of Buttons
-        entries = [
-            MenuEntry(model) for model in models
-        ]
-
         self.menu = urwid.Pile(entries)
-        # add margin around
         self.menu = urwid.Padding(self.menu, left=2, right=2)
-        
-
-        # Put it in a LineBox for a border/title
         frame = urwid.LineBox(self.menu, title="Select a Model")
 
-        # Initialize the WidgetWrap with that outer frame
         super().__init__(frame)
 
     def keypress(self, size, key):
@@ -44,7 +49,7 @@ class PopupMenu(urwid.WidgetWrap):
         elif key == 'enter':
             # Enter → select the focused model
             if self.menu.focus is not None:
-                assert isinstance(self.menu.focus, MenuEntry), "Focused item must be a MenuEntry"
+                assert hasattr(self.menu.focus, 'get_entry'), "Focused entry must have a get_entry method"
                 selected_model = self.menu.focus.get_label()
                 self.on_select(selected_model)
             else:

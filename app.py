@@ -7,8 +7,9 @@ import threading
 import urwid
 
 from custom_widgets.chat import ChatHistory, EditableChatBubble
-from custom_widgets.model_select import PopupMenu
+from custom_widgets.model_select import ModelEntry, PopupMenu
 from custom_widgets.vimkey import VimKeyHandler
+from models.main import get_completion
 
 
 def edit_in_editor(content):
@@ -46,11 +47,7 @@ class KeyValueText(urwid.WidgetWrap):
 class ChatApp:
     def __init__(self, chat_file, model, available_models):
         # Color palette: user, assistant messages, focus highlight, footer
-        self._completion = None
         self._busy = False
-
-        threading.Thread(target=self._preload_completion, daemon=True).start()
-
 
         self.palette = [
             ('user', 'black', 'dark blue'),
@@ -65,6 +62,9 @@ class ChatApp:
 
         self.model = model
         self.available_models = available_models
+
+        self.compelte = None
+        threading.Thread(target=self.load_model, daemon=True).start()
 
         messages = []
 
@@ -82,7 +82,7 @@ class ChatApp:
 
         self.main = VimKeyHandler(chat_history=self.chat_history, header=self.header)
 
-        self.model_select = PopupMenu(self.available_models, on_select=self.select_model, on_close=self.open_main_view)
+        self.model_select = PopupMenu([ModelEntry(model) for model in self.available_models.values()], on_select=self.select_model, on_close=self.open_main_view)
 
         # Main loop with key handler
         self.loop = urwid.MainLoop(
@@ -91,6 +91,13 @@ class ChatApp:
             unhandled_input=self.handle_input,
             input_filter=self.input_filter,
         )
+
+    def load_model(self):
+        # This method is used to load the model in a separate thread
+        # to avoid blocking the main loop
+        self.complete = get_completion(self.model)
+        self.header.set_value("model", self.model["name"])
+        self.loop.draw_screen()
 
     def input_filter(self, input_list, raw_input):
         if 'window resize' in input_list:
@@ -105,13 +112,6 @@ class ChatApp:
 
     def selectable(self):
         return True
-
-    def _preload_completion(self):
-        """
-        Blocking import in thread, caches module for later use
-        """
-        from litellm import completion
-        self._completion = completion
 
     def edit_message_in_editor(self, msg_index):
         widget = self.chat_history.message_list[msg_index]
@@ -132,7 +132,9 @@ class ChatApp:
 
     def select_model(self, model):
         self.model = model 
-        self.header.set_value("model", model)
+        self.complete = None
+        threading.Thread(target=self.load_model, daemon=True).start()
+        self.header.set_value("model", model["name"])
         self.loop.widget = self.main
 
     def open_popup(self):
@@ -157,23 +159,16 @@ class ChatApp:
         self.loop.draw_screen()
 
 
-        # stream response
-        # import completion if not already imported async
-        if self._completion is None:
-            from litellm import completion
-            self._completion = completion
-
-
+        if self.complete is None:
+            self.load_model()
 
         messages = [msg.to_dict() for msg in self.chat_history.message_list[:-1]]
-        response = self._completion(model=self.model, messages=messages, stream=True) # type: ignore
+        response = self.complete(model=self.model["name"], messages=messages) # type: ignore
         for chunk in response: # type: ignore
-            delta = chunk.choices[0].delta.content
-            if delta:
-                response_message.content += delta
-                response_message.update()
-                self.chat_history.set_focus_valign("bottom")
-                self.loop.draw_screen()
+            response_message.content += chunk
+            response_message.update()
+            self.chat_history.set_focus_valign("bottom")
+            self.loop.draw_screen()
 
     def write_changes(self):
         with open(self.chat_file, 'w', encoding='utf-8') as f:

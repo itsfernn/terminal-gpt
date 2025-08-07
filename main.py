@@ -29,10 +29,11 @@ def set_api_keys(config):
 
 
 def get_avaliable_models(config):
-    available_models = []
-    for key, value in config["providers"].items():
-        if os.environ.get(f"{key.upper()}_API_KEY"):
-            available_models.extend(value.get("models", []))
+    available_models = {}
+    for provider, data in config["providers"].items():
+        if os.environ.get(f"{provider.upper()}_API_KEY"):
+            for model in data.get("models", []):
+                available_models[model] = {"provider": provider, "name": model}
     return available_models
 
 
@@ -48,16 +49,17 @@ def main():
 
     config = load_config()
     set_api_keys(config)
-    models = get_avaliable_models(config)
+    available_models = get_avaliable_models(config)
 
-    model = args.model if args.model else config.get("default_model", "gpt-4.1-mini")
+    model_name = args.model if args.model else config.get("default_model", "gpt-4.1-mini")
+    model = available_models.get(model_name, None)
 
-    if not models:
+    if not available_models:
         print("No models found in configuration. Please check your config.toml.")
         return
 
-    if args.model not in models:
-        print(f"Model '{args.model}' not found in configuration. Available models: {models}")
+    if args.model not in available_models:
+        print(f"Model '{args.model}' not found in configuration. Available models: {available_models}")
         return
 
     # Check if the chat file exists, if not, create a temporary one
@@ -76,7 +78,7 @@ def main():
     else:
         chat_file = args.chat_file
 
-    app = ChatApp(chat_file, model, models)
+    app = ChatApp(chat_file, model, available_models)
     app.run()
     app.shutdown()
 
