@@ -35,8 +35,9 @@ class PopupMenu(urwid.WidgetWrap):
         self.on_close = on_close
 
         self.menu = urwid.Pile(entries)
-        self.menu = urwid.Padding(self.menu, left=2, right=2)
-        frame = urwid.LineBox(self.menu, title="Select a Model")
+        ## add padding
+        menu_padding = urwid.Padding(self.menu, left=2, right=2)
+        frame = urwid.LineBox(menu_padding, title="Select a Model")
 
         super().__init__(frame)
 
@@ -48,11 +49,14 @@ class PopupMenu(urwid.WidgetWrap):
             return self.menu.keypress(size, 'up')   # type: ignore
         elif key == 'enter':
             # Enter → select the focused model
+            print("enter pressed")
             if self.menu.focus is not None:
-                assert hasattr(self.menu.focus, 'get_entry'), "Focused entry must have a get_entry method"
-                selected_model = self.menu.focus.get_label()
-                self.on_select(selected_model)
+                print("menu.focus is not None")
+                selection = self.menu.focus.get_entry()
+                print(f"selection: {selection}")
+                self.on_select(selection)
             else:
+                print("menu.focus is None")
                 self.on_close()
             return None
         elif key in ('q', 'esc'):

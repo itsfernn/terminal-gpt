@@ -7,12 +7,15 @@ from custom_widgets.chat import ChatHistory, EditableChatBubble
 
 class VimKeyHandler(urwid.WidgetWrap):
     MAX_KEY_SEQ_LENGTH = 2
-    def __init__(self, chat_history, header):
+    def __init__(self, chat_history, header=None, footer=None):
         self.chat_history : ChatHistory = chat_history
         self.header = header
+        self.footer = footer
+
         self.frame = urwid.Frame(
             body=chat_history,
             header=header,
+            footer=self.footer,
             focus_part='body'
         )
 
@@ -60,14 +63,11 @@ class VimKeyHandler(urwid.WidgetWrap):
 
     def set_insert_mode(self, mode):
         self.insert_mode = mode
-        self.header.set_value("insert_mode", self.insert_mode)
+        if self.footer is not None:
+            mode = "insert" if mode else "normal"
+            self.footer.update(mode=mode)
 
     def keypress(self, size, key):
-        if isinstance(key, str):
-            self.header.set_value("key", key)
-
-        self.header.set_value("key_buffer", "".join(self.key_buffer))
-
         # always reset on esc
         if self.insert_mode:
             if key == "esc":
@@ -76,20 +76,21 @@ class VimKeyHandler(urwid.WidgetWrap):
             return super().keypress(size, key)
 
         self.key_buffer.append(key)
-        self.header.set_value("key_buffer", "".join(self.key_buffer))
-
-        matched = False
+        if self.footer is not None:
+            self.footer.update(key_sequence = "".join(self.key_buffer))
 
         for keybind in self.keybinds:
             if keybind == tuple(self.key_buffer):
                 self.keybinds[keybind]()
                 self.key_buffer.clear()
                 return None
-            elif keybind[:len(self.key_buffer)] == tuple(self.key_buffer): # partial match
+            elif keybind[:len(self.key_buffer)] == tuple(self.key_buffer): 
+                # partial match
                 return None
 
         self.key_buffer.clear()
-        self.header.set_value("key_buffer", "".join(self.key_buffer))
+        if self.footer is not None:
+            self.footer.update(key_sequence = "".join(self.key_buffer))
         return super().keypress(size, key)
 
     def enter_insert_mode(self, edit_position=None):

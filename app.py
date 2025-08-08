@@ -23,26 +23,57 @@ def edit_in_editor(content):
     os.unlink(tf.name)
     return new_content
 
+pallet= [
+]
+    
 
-class KeyValueText(urwid.WidgetWrap):
-    def __init__(self, values={}):
-        self.kv_store = values
-        self.text = urwid.Text(self.build_string())
-        super().__init__(self.text)
+class VimHeader(urwid.WidgetWrap):
+    def __init__(self, model_name=None, provider=None, mode=None, key_sequence=None):
+        self.model_name = model_name or ""
+        self.provider = provider or ""
+        self.mode = mode or "Normal"
+        self.key_sequence = key_sequence or ""
+        self._update_header()
 
-    def set_value(self, key, value):
-        self.kv_store[key] = value
-        self.text.set_text(self.build_string())
+    def _mode_attr_name(self):
+        return f'mode_{self.mode.lower()}'
 
-    def build_string(self):
-        string = ''
-        for key, value in self.kv_store.items():
-            if string:
-                string += " | "
-            string += f"{key}: {value}"
+    def _update_header(self):
+        # Mode indicator with its own style
+        mode_widget = urwid.Text(f" {self.mode.upper()} ")
+        mode_attr = urwid.AttrMap(mode_widget, self._mode_attr_name())
 
-        return string
+        # Remaining info (normal header style)
+        info_text = urwid.Text(f" {self.model_name} [{self.provider}]", align='left')
 
+        # Left side: mode + info
+        left_side = urwid.Columns([
+            ('pack', mode_attr),
+            ('weight', 1, info_text)
+        ], dividechars=0)
+
+        # Right side: key sequence
+        right_side = urwid.Text(f"{self.key_sequence} ", align='right')
+
+        # Whole header layout
+        header_columns = urwid.Columns([
+            ('weight', 1, left_side),
+            ('pack', right_side)
+        ])
+
+        self._w = urwid.AttrMap(header_columns, 'header')
+
+    def update(self, mode=None, model_name=None, provider=None, key_sequence=None):
+        if mode is not None:
+            self.mode = mode
+        if model_name is not None:
+            self.model_name = model_name
+        if provider is not None:
+            self.provider = provider
+        if key_sequence is not None:
+            self.key_sequence = key_sequence
+
+        self._update_header()
 
 class ChatApp:
     def __init__(self, chat_file, model, available_models):
@@ -50,6 +81,10 @@ class ChatApp:
         self._busy = False
 
         self.palette = [
+            ('header', 'light gray', 'black'),
+            ('mode_normal', 'black,bold', 'dark cyan'),
+            ('mode_insert', 'black,bold', 'dark blue'),
+            ('mode_visual', 'black,bold', 'dark magenta'),
             ('user', 'black', 'dark blue'),
             ('assistant', 'black', 'dark blue'),
             ('focus', 'black', 'white'),
@@ -61,6 +96,7 @@ class ChatApp:
 
 
         self.model = model
+        print(model)
         self.available_models = available_models
 
         self.compelte = None
@@ -78,9 +114,9 @@ class ChatApp:
 
         self.chat_history = ChatHistory(messages=messages)
 
-        self.header = KeyValueText(values={'model': model})
+        self.footer = VimHeader(model_name=model["name"], provider=model["provider"], mode="Normal", key_sequence="")
 
-        self.main = VimKeyHandler(chat_history=self.chat_history, header=self.header)
+        self.main = VimKeyHandler(chat_history=self.chat_history, header=None, footer=self.footer)
 
         self.model_select = PopupMenu([ModelEntry(model) for model in self.available_models.values()], on_select=self.select_model, on_close=self.open_main_view)
 
@@ -96,12 +132,10 @@ class ChatApp:
         # This method is used to load the model in a separate thread
         # to avoid blocking the main loop
         self.complete = get_completion(self.model)
-        self.header.set_value("model", self.model["name"])
         self.loop.draw_screen()
 
     def input_filter(self, input_list, raw_input):
         if 'window resize' in input_list:
-            self.main.header.set_value("window_size", self.loop.screen.get_cols_rows())
             self.chat_history.rebuild()
         if self._busy:
             # filter out all “enter” presses
@@ -134,7 +168,7 @@ class ChatApp:
         self.model = model 
         self.complete = None
         threading.Thread(target=self.load_model, daemon=True).start()
-        self.header.set_value("model", model["name"])
+        self.footer.update(model_name=self.model["name"], provider=self.model["provider"])
         self.loop.widget = self.main
 
     def open_popup(self):
