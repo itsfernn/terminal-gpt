@@ -27,12 +27,13 @@ pallet= [
 ]
     
 
-class VimHeader(urwid.WidgetWrap):
-    def __init__(self, model_name=None, provider=None, mode=None, key_sequence=None):
+class VimFooter(urwid.WidgetWrap):
+    def __init__(self, model_name=None, provider=None, mode=None, key_sequence=None, chat_file=None):
         self.model_name = model_name or ""
         self.provider = provider or ""
         self.mode = mode or "Normal"
         self.key_sequence = key_sequence or ""
+        self.chat_file = chat_file or ""
         self._update_header()
 
     def _mode_attr_name(self):
@@ -44,12 +45,17 @@ class VimHeader(urwid.WidgetWrap):
         mode_attr = urwid.AttrMap(mode_widget, self._mode_attr_name())
 
         # Remaining info (normal header style)
-        info_text = urwid.Text(f" {self.model_name} [{self.provider}]", align='left')
+        model_text = urwid.Text(f" {self.model_name} [{self.provider}]", align='left')
+        #model_attr = urwid.AttrMap(model_text, 'header_model')
+
+        chat_file_text = urwid.Text(f" {self.chat_file}", align='left')
+        chat_file_text = urwid.AttrMap(chat_file_text, 'header_file')
 
         # Left side: mode + info
         left_side = urwid.Columns([
             ('pack', mode_attr),
-            ('weight', 1, info_text)
+            ('pack', model_text),
+             ('weight', 5, chat_file_text)
         ], dividechars=0)
 
         # Right side: key sequence
@@ -63,7 +69,7 @@ class VimHeader(urwid.WidgetWrap):
 
         self._w = urwid.AttrMap(header_columns, 'header')
 
-    def update(self, mode=None, model_name=None, provider=None, key_sequence=None):
+    def update(self, mode=None, model_name=None, provider=None, key_sequence=None, chat_file=None):
         if mode is not None:
             self.mode = mode
         if model_name is not None:
@@ -72,6 +78,8 @@ class VimHeader(urwid.WidgetWrap):
             self.provider = provider
         if key_sequence is not None:
             self.key_sequence = key_sequence
+        if chat_file is not None:
+            self.chat_file = chat_file
 
         self._update_header()
 
@@ -81,7 +89,9 @@ class ChatApp:
         self._busy = False
 
         self.palette = [
-            ('header', 'light gray', 'black'),
+            ('header_model', 'white', 'black'),
+            ('header_file', 'dark magenta', 'black'),
+            ('header', 'white', 'black'),
             ('mode_normal', 'black,bold', 'dark cyan'),
             ('mode_insert', 'black,bold', 'dark blue'),
             ('mode_visual', 'black,bold', 'dark magenta'),
@@ -114,7 +124,7 @@ class ChatApp:
 
         self.chat_history = ChatHistory(messages=messages)
 
-        self.footer = VimHeader(model_name=model["name"], provider=model["provider"], mode="Normal", key_sequence="")
+        self.footer = VimFooter(model_name=model["name"], provider=model["provider"], mode="Normal", key_sequence="", chat_file=self.chat_file)
 
         self.main = VimKeyHandler(chat_history=self.chat_history, header=None, footer=self.footer)
 
