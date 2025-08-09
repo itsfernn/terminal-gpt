@@ -23,10 +23,6 @@ def edit_in_editor(content):
     os.unlink(tf.name)
     return new_content
 
-pallet= [
-]
-    
-
 class VimFooter(urwid.WidgetWrap):
     def __init__(self, model_name=None, provider=None, mode=None, key_sequence=None, chat_file=None):
         self.model_name = model_name or ""
@@ -46,7 +42,6 @@ class VimFooter(urwid.WidgetWrap):
 
         # Remaining info (normal header style)
         model_text = urwid.Text(f" {self.model_name} [{self.provider}]", align='left')
-        #model_attr = urwid.AttrMap(model_text, 'header_model')
 
         chat_file_text = urwid.Text(f" {self.chat_file}", align='left')
         chat_file_text = urwid.AttrMap(chat_file_text, 'header_file')
@@ -89,9 +84,8 @@ class ChatApp:
         self._busy = False
 
         self.palette = [
-            ('header_model', 'white', 'black'),
             ('header_file', 'dark magenta', 'black'),
-            ('header', 'white', 'black'),
+            ('header', 'light gray', 'black'),
             ('mode_normal', 'black,bold', 'dark cyan'),
             ('mode_insert', 'black,bold', 'dark blue'),
             ('mode_visual', 'black,bold', 'dark magenta'),
